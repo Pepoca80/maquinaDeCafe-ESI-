@@ -16,13 +16,15 @@ class MaquinaCafe:
         self.estado = EstadoPronta(self)
         self.credito = 0.0
         self.previsao_termino = None
+        self.contador_preparos = 0  # Novo contador (RN07)
         self.estoque = {
-            "agua": 2000,
-            "cafe": 500,
-            "leite": 1000,
-            "chocolate": 400,
-            "acucar": 300,
-            "copos": 50
+            "agua": 2000, "cafe": 500, "leite": 1000,
+            "chocolate": 400, "acucar": 300, "copos": 50
+        }
+        # Capacidade máxima (RN09)
+        self.capacidade_maxima = {
+            "agua": 2000, "cafe": 500, "leite": 1000,
+            "chocolate": 400, "acucar": 300, "copos": 50
         }
 
     def mudar_estado(self, novo_estado):
@@ -35,6 +37,18 @@ class MaquinaCafe:
         if self.credito + valor > 50.00:
             raise ValueError("Crédito limite excedido.")
         self.credito += valor
+
+    def reabastecer(self, item, quantidade):
+        if type(self.estado).__name__ != "EstadoManutencao":
+            raise Exception("Reabastecimento apenas em manutenção.")
+        if item not in self.estoque:
+            raise ValueError("Item de estoque inexistente.")
+
+        novo_valor = self.estoque[item] + quantidade
+        if novo_valor > self.capacidade_maxima[item]:
+            self.estoque[item] = self.capacidade_maxima[item]
+        else:
+            self.estoque[item] = novo_valor
 
 
 class EstadoMaquina(ABC):
@@ -49,6 +63,15 @@ class EstadoMaquina(ABC):
 
     @abstractmethod
     def atualizar_status(self): pass
+
+    @abstractmethod
+    def entrar_manutencao(self): pass
+
+    @abstractmethod
+    def sair_manutencao(self): pass
+
+    @abstractmethod
+    def registrar_limpeza(self): pass
 
 
 class EstadoPronta(EstadoMaquina):
@@ -82,8 +105,11 @@ class EstadoPronta(EstadoMaquina):
         self.maquina.estoque["chocolate"] -= receita["chocolate"]
         self.maquina.estoque["acucar"] -= necessidade_acucar
         self.maquina.estoque["copos"] -= 1
-
         self.maquina.credito -= receita["preco"]
+
+        # Incrementa o contador de preparos
+        self.maquina.contador_preparos += 1
+
         self.maquina.previsao_termino = time.time() + receita["tempo"]
         self.maquina.mudar_estado(EstadoPreparando(self.maquina))
         return "Pedido em preparo"
@@ -94,13 +120,27 @@ class EstadoPronta(EstadoMaquina):
     def atualizar_status(self):
         pass  # Não faz nada se a máquina já está pronta
 
+    def entrar_manutencao(self):
+        self.maquina.mudar_estado(EstadoManutencao(self.maquina))
+        return "Máquina em manutenção"
+
+    def sair_manutencao(self):
+        raise Exception("A máquina não está em manutenção.")
+
+    def registrar_limpeza(self):
+        raise Exception("Limpeza só pode ser registrada em manutenção.")
+
 
 class EstadoPreparando(EstadoMaquina):
     def atualizar_status(self):
-        # Verifica dinamicamente se o tempo já passou
         if self.maquina.previsao_termino and time.time() >= self.maquina.previsao_termino:
             self.maquina.previsao_termino = None
-            self.maquina.mudar_estado(EstadoPronta(self.maquina))
+            # RN07: Checa se atingiu 30 preparos
+            if self.maquina.contador_preparos >= 30:
+                self.maquina.mudar_estado(
+                    EstadoAguardandoLimpeza(self.maquina))
+            else:
+                self.maquina.mudar_estado(EstadoPronta(self.maquina))
 
     def fazer_pedido(self, bebida, acucar):
         self.atualizar_status()  # Dá um "refresh" antes de bloquear
@@ -112,3 +152,60 @@ class EstadoPreparando(EstadoMaquina):
         self.maquina.previsao_termino = None
         self.maquina.mudar_estado(EstadoPronta(self.maquina))
         return "Pedido cancelado"
+
+    def entrar_manutencao(self):
+        raise Exception(
+            "Não é possível entrar em manutenção durante o preparo.")
+
+    def sair_manutencao(self):
+        raise Exception("A máquina não está em manutenção.")
+
+    def registrar_limpeza(self):
+        raise Exception("Limpeza só pode ser registrada em manutenção.")
+
+
+class EstadoAguardandoLimpeza(EstadoMaquina):
+    def fazer_pedido(self, bebida, acucar):
+        raise Exception("Máquina aguardando limpeza.")
+
+    def cancelar_pedido(self):
+        raise Exception("Nenhum pedido em preparo.")
+
+    def atualizar_status(self):
+        pass
+
+    def entrar_manutencao(self):
+        self.maquina.mudar_estado(EstadoManutencao(self.maquina))
+        return "Máquina em manutenção"
+
+    def sair_manutencao(self):
+        raise Exception("A máquina não está em manutenção.")
+
+    def registrar_limpeza(self):
+        raise Exception("Limpeza só pode ser registrada em manutenção.")
+
+
+class EstadoManutencao(EstadoMaquina):
+    def fazer_pedido(self, bebida, acucar):
+        raise Exception("Máquina em manutenção.")
+
+    def cancelar_pedido(self):
+        raise Exception("Nenhum pedido em preparo.")
+
+    def atualizar_status(self):
+        pass
+
+    def entrar_manutencao(self):
+        raise Exception("A máquina já está em manutenção.")
+
+    def sair_manutencao(self):
+        # RN08: Volta para aguardando limpeza se não limpou
+        if self.maquina.contador_preparos >= 30:
+            self.maquina.mudar_estado(EstadoAguardandoLimpeza(self.maquina))
+        else:
+            self.maquina.mudar_estado(EstadoPronta(self.maquina))
+        return "Saiu da manutenção"
+
+    def registrar_limpeza(self):
+        self.maquina.contador_preparos = 0
+        return "Limpeza registrada"

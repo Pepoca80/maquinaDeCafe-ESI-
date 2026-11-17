@@ -1,6 +1,7 @@
 import pytest
 from maquina import MaquinaCafe
 from unittest.mock import patch
+import time
 
 
 def test_maquina_inicia_pronta():
@@ -113,3 +114,73 @@ def test_verificar_status_conclui_preparo_automaticamente():
 
         # Deve ter voltado para o estado PRONTA automaticamente
         assert type(maquina.estado).__name__ == "EstadoPronta"
+
+
+def test_bloqueio_por_necessidade_de_limpeza():
+    maquina = MaquinaCafe()
+    # Forçamos a mudança para simular o limite de 30 preparos
+    from maquina import EstadoAguardandoLimpeza
+    maquina.mudar_estado(EstadoAguardandoLimpeza(maquina))
+
+    with pytest.raises(Exception, match="Máquina aguardando limpeza"):
+        maquina.estado.fazer_pedido("Café expresso", 0)
+
+
+def test_entrar_manutencao():
+    maquina = MaquinaCafe()
+    maquina.estado.entrar_manutencao()
+
+    from maquina import EstadoManutencao
+    assert type(maquina.estado).__name__ == "EstadoManutencao"
+
+
+def test_maquina_trava_apos_30_preparos():
+    maquina = MaquinaCafe()
+
+    # Simula que a máquina está no 30º preparo e o tempo já passou
+    maquina.contador_preparos = 30
+    from maquina import EstadoPreparando
+    maquina.mudar_estado(EstadoPreparando(maquina))
+    maquina.previsao_termino = time.time() - 1
+
+    # A transição real ocorre ao atualizar o status no fim do preparo
+    maquina.estado.atualizar_status()
+
+    # O 31º pedido deve ser bloqueado
+    with pytest.raises(Exception, match="Máquina aguardando limpeza"):
+        maquina.estado.fazer_pedido("Café expresso", 0)
+
+
+def test_fluxo_manutencao_e_limpeza():
+    maquina = MaquinaCafe()
+    # Forçamos a máquina a precisar de limpeza
+    from maquina import EstadoAguardandoLimpeza
+    maquina.mudar_estado(EstadoAguardandoLimpeza(maquina))
+
+    # 1. Operador entra em manutenção
+    maquina.estado.entrar_manutencao()
+    assert type(maquina.estado).__name__ == "EstadoManutencao"
+
+    # 2. Operador registra a limpeza
+    maquina.estado.registrar_limpeza()
+    assert maquina.contador_preparos == 0
+
+    # 3. Operador sai da manutenção (a máquina deve voltar a ficar pronta)
+    maquina.estado.sair_manutencao()
+    assert type(maquina.estado).__name__ == "EstadoPronta"
+
+
+def test_reabastecimento_so_em_manutencao():
+    maquina = MaquinaCafe()
+
+    # Tentar reabastecer fora da manutenção deve falhar
+    with pytest.raises(Exception, match="Reabastecimento apenas em manutenção"):
+        maquina.reabastecer("agua", 100)
+
+    # Entrando em manutenção
+    maquina.estado.entrar_manutencao()
+    maquina.estoque["agua"] = 1500
+
+    # Reabastecendo com sucesso (não pode passar de 2000)
+    maquina.reabastecer("agua", 1000)
+    assert maquina.estoque["agua"] == 2000
